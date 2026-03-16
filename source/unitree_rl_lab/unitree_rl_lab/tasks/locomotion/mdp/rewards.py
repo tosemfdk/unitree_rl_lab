@@ -117,12 +117,37 @@ def feet_height_body(
     return reward
 
 
-def foot_clearance_reward(
-    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, target_height: float, std: float, tanh_mult: float
+def feet_clearance_reward(
+    env: ManagerBasedRLEnv,
+    asset_cfg: SceneEntityCfg,
+    sensor_cfg: SceneEntityCfg,
+    target_height: float,
+    std: float,
+    tanh_mult: float,
 ) -> torch.Tensor:
-    """Reward the swinging feet for clearing a specified height off the ground"""
+    """Reward the swinging feet for clearing a specified height off the ground using height-scanner data."""
     asset: RigidObject = env.scene[asset_cfg.name]
-    foot_z_target_error = torch.square(asset.data.body_pos_w[:, asset_cfg.body_ids, 2] - target_height)
+    height_scanner = env.scene.sensors[sensor_cfg.name]
+
+    # Foot positions in world frame
+    foot_pos = asset.data.body_pos_w[:, asset_cfg.body_ids]
+    foot_xy = foot_pos[:, :, :2]
+    foot_z = foot_pos[:, :, 2]
+
+    # Height scanner hit points in world frame
+    hit_xy = height_scanner.data.ray_hits_w[:, :, :2]
+    hit_z = height_scanner.data.ray_hits_w[:, :, 2]
+
+    # For each foot, pick the closest ray-hit point in XY and use its Z value as local ground height.
+    hit_dist_sq = torch.sum((foot_xy.unsqueeze(2) - hit_xy.unsqueeze(1)) ** 2, dim=-1)
+    invalid_hit = torch.isinf(hit_z) | torch.isinf(hit_xy).any(dim=-1)
+    hit_dist_sq = torch.where(invalid_hit.unsqueeze(1), torch.full_like(hit_dist_sq, float("inf")), hit_dist_sq)
+    closest_hit_idx = torch.argmin(hit_dist_sq, dim=2)
+    ground_z = torch.gather(hit_z, 1, closest_hit_idx)
+    ground_z = torch.where(torch.isfinite(ground_z), ground_z, foot_z)
+
+    # Clearance error around the target foot height.
+    foot_z_target_error = torch.square((foot_z - ground_z) - target_height)
     foot_velocity_tanh = torch.tanh(tanh_mult * torch.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2], dim=2))
     reward = foot_z_target_error * foot_velocity_tanh
     return torch.exp(-torch.sum(reward, dim=1) / std)
