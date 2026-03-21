@@ -146,7 +146,7 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "com_range": {"x": (-0.02, 0.02), "y": (-0.015, 0.015), "z": (-0.01, 0.01)},
+            "com_range": {"x": (-0.05, 0.05), "y": (-0.015, 0.015), "z": (-0.01, 0.01)},
         },
     )
 
@@ -217,8 +217,13 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    JointPositionAction = mdp.JointPositionActionCfg(
-        asset_name="robot", joint_names=[".*"], scale=0.25, use_default_offset=True, clip={".*": (-100.0, 100.0)}
+    JointPositionAction = mdp.GravityCompJointPositionActionCfg(
+        asset_name="robot",
+        joint_names=[".*"],
+        scale=0.25,
+        use_default_offset=True,
+        clip={".*": (-100.0, 100.0)},
+        gravity_comp_scale=0.5,
     )
 
 
