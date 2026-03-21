@@ -28,6 +28,17 @@ def energy(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("r
     return torch.sum(torch.abs(qvel) * torch.abs(qfrc), dim=-1)
 
 
+def mean_abs_joint_torque(
+    env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
+) -> torch.Tensor:
+    """Mean absolute joint torque for selected joints.
+
+    Useful for reward debugging/logging terms (for example, front vs rear leg effort).
+    """
+    asset: Articulation = env.scene[asset_cfg.name]
+    return torch.mean(torch.abs(asset.data.applied_torque[:, asset_cfg.joint_ids]), dim=-1)
+
+
 def stand_still(
     env: ManagerBasedRLEnv, command_name: str = "base_velocity", asset_cfg: SceneEntityCfg = SceneEntityCfg("robot")
 ) -> torch.Tensor:
@@ -125,7 +136,10 @@ def feet_clearance_reward(
     std: float,
     tanh_mult: float,
 ) -> torch.Tensor:
-    """Reward the swinging feet for clearing a specified height off the ground using height-scanner data."""
+    """Signed foot-clearance reward from local terrain height.
+
+    Positive when swing-foot clearance is above target, negative when below.
+    """
     asset: RigidObject = env.scene[asset_cfg.name]
     height_scanner = env.scene.sensors[sensor_cfg.name]
 
@@ -146,11 +160,15 @@ def feet_clearance_reward(
     ground_z = torch.gather(hit_z, 1, closest_hit_idx)
     ground_z = torch.where(torch.isfinite(ground_z), ground_z, foot_z)
 
-    # Clearance error around the target foot height.
-    foot_z_target_error = torch.square((foot_z - ground_z) - target_height)
+    # Signed clearance around target height:
+    # > 0 when above target, < 0 when below target.
+    clearance = (foot_z - ground_z) - target_height
+    clearance_scaled = torch.tanh(clearance / max(std, 1e-6))
     foot_velocity_tanh = torch.tanh(tanh_mult * torch.norm(asset.data.body_lin_vel_w[:, asset_cfg.body_ids, :2], dim=2))
-    reward = foot_z_target_error * foot_velocity_tanh
-    return torch.exp(-torch.sum(reward, dim=1) / std)
+    reward = torch.mean(clearance_scaled * foot_velocity_tanh, dim=1)
+    reward *= torch.linalg.norm(env.command_manager.get_command("base_velocity"), dim=1) > 0.1
+    reward *= torch.clamp(-env.scene["robot"].data.projected_gravity_b[:, 2], 0, 0.7) / 0.7
+    return reward
 
 
 def feet_too_near(

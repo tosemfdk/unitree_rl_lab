@@ -40,12 +40,12 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
         "boxes": terrain_gen.MeshRandomGridTerrainCfg(
             proportion=0.2, grid_width=0.45, grid_height_range=(0.00, 0.2), platform_width=2.0
         ),
-        # "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
-        #     proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
-        # ),
-        # "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-        #     proportion=0.1, slope_range=(0.0, 0.4), platform_width=2.0, border_width=0.25
-        # ),
+        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
+        ),
+        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+            proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
+        ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
         #     proportion=0.2,
         #     step_height_range=(0.05, 0.23),
@@ -141,6 +141,15 @@ class EventCfg:
         },
     )
 
+    base_com = EventTerm(
+        func=mdp.randomize_rigid_body_com,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
+            "com_range": {"x": (-0.02, 0.02), "y": (-0.015, 0.015), "z": (-0.01, 0.01)},
+        },
+    )
+
     # reset
     base_external_force_torque = EventTerm(
         func=mdp.apply_external_force_torque,
@@ -222,7 +231,7 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        base_lin_vel = ObsTerm(func=mdp.base_lin_vel, clip=(-100, 100), noise=Unoise(n_min=-0.2, n_max=0.2))
+        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel, clip=(-100, 100), noise=Unoise(n_min=-0.2, n_max=0.2))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, clip=(-100, 100), noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, clip=(-100, 100), noise=Unoise(n_min=-0.05, n_max=0.05))
         velocity_commands = ObsTerm(
@@ -271,6 +280,17 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
+    monitor_front_torque = RewTerm(
+        func=mdp.mean_abs_joint_torque,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names="F[L,R]_.*_joint")},
+    )
+    monitor_rear_torque = RewTerm(
+        func=mdp.mean_abs_joint_torque,
+        weight=1.0,
+        params={"asset_cfg": SceneEntityCfg("robot", joint_names="R[L,R]_.*_joint")},
+    )
+
     # -- task
     track_lin_vel_xy = RewTerm(
         func=mdp.track_lin_vel_xy_exp, weight=2.5, params={"command_name": "base_velocity", "std": math.sqrt(0.25)}
@@ -303,15 +323,15 @@ class RewardsCfg:
     )
 
     # -- feet
-    feet_air_time = RewTerm(
-        func=mdp.feet_air_time,
-        weight=5.0,
-        params={
-            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-            "command_name": "base_velocity",
-            "threshold": 0.05,
-        },
-    )
+    # feet_air_time = RewTerm(
+    #     func=mdp.feet_air_time,
+    #     weight=1.0,
+    #     params={
+    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+    #         "command_name": "base_velocity",
+    #         "threshold": 0.05,
+    #     },
+    # )
     air_time_variance = RewTerm(
         func=mdp.air_time_variance_penalty,
         weight=-1.0,
@@ -326,28 +346,28 @@ class RewardsCfg:
         },
     )
     
-    # feet_clearance = RewTerm(
-    #     func=mdp.feet_clearance_reward,
-    #     weight=1.0,
-    #     params={
-    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-    #         "sensor_cfg": SceneEntityCfg("height_scanner"),
-    #         "target_height": 0.08,
-    #         "std": 0.05,
-    #         "tanh_mult": 2.0,
-    #     },
-    # )
-
-    feet_height_body_penalty = RewTerm(
-        func=mdp.feet_height_body,
-        weight=-100.0,  
+    feet_clearance = RewTerm(
+        func=mdp.feet_clearance_reward,
+        weight=1.0,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
-            "command_name": "base_velocity",
-            "target_height": -0.27, 
-            "tanh_mult": 3.0,
+            "sensor_cfg": SceneEntityCfg("height_scanner"),
+            "target_height": 0.05,
+            "std": 0.05,
+            "tanh_mult": 2.0,
         },
     )
+
+    # feet_height_body_penalty = RewTerm(
+    #     func=mdp.feet_height_body,
+    #     weight=-100.0,
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
+    #         "command_name": "base_velocity",
+    #         "target_height": -0.27,
+    #         "tanh_mult": 3.0,
+    #     },
+    # )
     # feet_contact_forces = RewTerm(
     #     func=mdp.contact_forces,
     #     weight=-0.02,

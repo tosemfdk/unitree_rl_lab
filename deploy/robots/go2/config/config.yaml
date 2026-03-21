@@ -9,13 +9,14 @@ FSM:
       type: RLBase
   Passive:
     transitions: 
-      FixStand: LT + A.on_pressed
+      FixStand: A.on_pressed
+      Velocity: X.on_pressed
     mode: [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
     kd: [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]
   FixStand:
     transitions: 
-      Passive: LT + B.on_pressed
-      Velocity: start.on_pressed
+      Passive: B.on_pressed
+      Velocity: X.on_pressed
     kp: [60, 80, 80, 60, 80, 80, 60, 80, 80, 60, 80, 80]
     kd: [5, 4, 4, 5, 4, 4, 5, 4, 4, 5, 4, 4]
     ts: [0, 1, 2]
@@ -26,6 +27,7 @@ FSM:
     ]
   Velocity:
     transitions: 
-      Passive: LT + B.on_pressed
-    policy_dir: ../../../logs/rsl_rl/unitree_go2_velocity
+      Passive: B.on_pressed
+      FixStand: A.on_pressed
+    policy_dir: ../../../logs/rsl_rl/unitree_go2_velocity/2026-03-18_17-48-34
     

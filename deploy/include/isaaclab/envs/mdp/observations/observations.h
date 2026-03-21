@@ -10,6 +10,13 @@ namespace isaaclab
 namespace mdp
 {
 
+REGISTER_OBSERVATION(base_lin_vel)
+{
+    // Low-level Go2 state doesn't provide base linear velocity directly.
+    // Keep the deploy observation shape consistent with trained policy.
+    return std::vector<float>{0.0f, 0.0f, 0.0f};
+}
+
 REGISTER_OBSERVATION(base_ang_vel)
 {
     auto & asset = env->robot;
