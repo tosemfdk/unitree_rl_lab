@@ -217,12 +217,18 @@ class CommandsCfg:
 class ActionsCfg:
     """Action specifications for the MDP."""
 
-    JointPositionAction = mdp.GravityCompJointPositionActionCfg(
+    JointPositionAction = mdp.GravityCompPerLegStiffnessActionCfg(
         asset_name="robot",
         joint_names=[".*"],
-        scale=0.25,
+        # Keep position action scaling on the first 12 dims; PLS gain actions use identity scaling.
+        scale={".*": 0.25},
         use_default_offset=True,
         clip={".*": (-100.0, 100.0)},
+        kp_min=20.0,
+        kp_max=60.0,
+        kd_sqrt_scale=0.2,
+        kp_action_clip=(-1.0, 1.0),
+        leg_order=("FL", "FR", "RL", "RR"),
         gravity_comp_scale=0.5,
     )
 
@@ -236,7 +242,6 @@ class ObservationsCfg:
         """Observations for policy group."""
 
         # observation terms (order preserved)
-        # base_lin_vel = ObsTerm(func=mdp.base_lin_vel, clip=(-100, 100), noise=Unoise(n_min=-0.2, n_max=0.2))
         base_ang_vel = ObsTerm(func=mdp.base_ang_vel, scale=0.2, clip=(-100, 100), noise=Unoise(n_min=-0.2, n_max=0.2))
         projected_gravity = ObsTerm(func=mdp.projected_gravity, clip=(-100, 100), noise=Unoise(n_min=-0.05, n_max=0.05))
         velocity_commands = ObsTerm(
@@ -249,7 +254,7 @@ class ObservationsCfg:
         last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
 
         def __post_init__(self):
-            # self.history_length = 5
+            self.history_length = 5
             self.enable_corruption = True
             self.concatenate_terms = True
 
@@ -285,16 +290,16 @@ class ObservationsCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
 
-    monitor_front_torque = RewTerm(
-        func=mdp.mean_abs_joint_torque,
-        weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names="F[L,R]_.*_joint")},
-    )
-    monitor_rear_torque = RewTerm(
-        func=mdp.mean_abs_joint_torque,
-        weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", joint_names="R[L,R]_.*_joint")},
-    )
+    # monitor_front_torque = RewTerm(
+    #     func=mdp.mean_abs_joint_torque,
+    #     weight=1.0,
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names="F[L,R]_.*_joint")},
+    # )
+    # monitor_rear_torque = RewTerm(
+    #     func=mdp.mean_abs_joint_torque,
+    #     weight=1.0,
+    #     params={"asset_cfg": SceneEntityCfg("robot", joint_names="R[L,R]_.*_joint")},
+    # )
 
     # -- task
     track_lin_vel_xy = RewTerm(
@@ -310,12 +315,12 @@ class RewardsCfg:
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2e-4)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.01)
+    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.02)
     dof_pos_limits = RewTerm(func=mdp.joint_pos_limits, weight=-10.0)
     energy = RewTerm(func=mdp.energy, weight=-2e-5)
 
     # -- robot
-    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-2.5)
+    flat_orientation_l2 = RewTerm(func=mdp.flat_orientation_l2, weight=-5.0)
 
     joint_pos = RewTerm(
         func=mdp.joint_position_penalty,
@@ -334,7 +339,7 @@ class RewardsCfg:
     #     params={
     #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
     #         "command_name": "base_velocity",
-    #         "threshold": 0.05,
+    #         "threshold": 0.5,
     #     },
     # )
     air_time_variance = RewTerm(
@@ -357,7 +362,7 @@ class RewardsCfg:
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
             "sensor_cfg": SceneEntityCfg("height_scanner"),
-            "target_height": 0.05,
+            "target_height": 0.04,
             "std": 0.05,
             "tanh_mult": 2.0,
         },
