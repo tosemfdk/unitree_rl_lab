@@ -266,3 +266,27 @@ def joint_mirror(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg, mirror_joint
         )
     reward *= 1 / len(mirror_joints) if len(mirror_joints) > 0 else 0
     return reward
+
+
+def action_slice_l2(
+    env: ManagerBasedRLEnv,
+    start_idx: int,
+    end_idx: int,
+    target: float = 0.0,
+) -> torch.Tensor:
+    """L2 penalty on a contiguous action slice.
+
+    This is useful for weakly regularizing specific action heads (for example,
+    PLS stiffness actions at indices 12:16) without affecting position actions.
+    """
+
+    actions = env.action_manager.action
+    dim = actions.shape[1]
+
+    start = max(0, int(start_idx))
+    end = min(int(end_idx), dim)
+    if end <= start:
+        return torch.zeros(actions.shape[0], device=env.device, dtype=actions.dtype)
+
+    target_tensor = torch.as_tensor(float(target), device=actions.device, dtype=actions.dtype)
+    return torch.mean(torch.square(actions[:, start:end] - target_tensor), dim=1)

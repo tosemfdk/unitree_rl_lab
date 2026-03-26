@@ -75,6 +75,12 @@ class GravityCompPerLegStiffnessAction(JointAction):
 
         if self.cfg.kp_max <= self.cfg.kp_min:
             raise ValueError(f"kp_max must be greater than kp_min. got {self.cfg.kp_max} <= {self.cfg.kp_min}")
+        self._kp_mapping_mode = str(self.cfg.kp_mapping_mode).strip().lower()
+        if self._kp_mapping_mode not in {"normalized", "default_scale"}:
+            raise ValueError(
+                "kp_mapping_mode must be one of {'normalized', 'default_scale'}. "
+                f"got '{self.cfg.kp_mapping_mode}'"
+            )
 
         leg_order = tuple(str(name).upper() for name in self.cfg.leg_order)
         expected_legs = {"FL", "FR", "RL", "RR"}
@@ -174,10 +180,23 @@ class GravityCompPerLegStiffnessAction(JointAction):
 
         # Per-leg stiffness actions
         leg_kp_actions = self.processed_actions[:, self._num_joints :]
-        leg_kp_norm = 0.5 * (leg_kp_actions + 1.0)
         kp_min = float(self.cfg.kp_min)
         kp_max = float(self.cfg.kp_max)
-        target_kp_per_leg = kp_min + leg_kp_norm * (kp_max - kp_min)
+        if self._kp_mapping_mode == "default_scale":
+            # Genesis-style mapping:
+            #   kp = kp_default + action * kp_action_scale, then clamp to [kp_min, kp_max].
+            kp_default = float(self.cfg.kp_default)
+            kp_action_scale = float(self.cfg.kp_action_scale)
+            target_kp_per_leg = kp_default + leg_kp_actions * kp_action_scale
+            target_kp_per_leg = torch.clamp(target_kp_per_leg, min=kp_min, max=kp_max)
+        else:
+            # Legacy normalized mapping:
+            #   kp_action_clip low/high maps linearly to [kp_min, kp_max].
+            kp_action_clip_low = float(self.cfg.kp_action_clip[0])
+            kp_action_clip_high = float(self.cfg.kp_action_clip[1])
+            clip_span = max(kp_action_clip_high - kp_action_clip_low, 1e-6)
+            leg_kp_norm = (leg_kp_actions - kp_action_clip_low) / clip_span
+            target_kp_per_leg = kp_min + leg_kp_norm * (kp_max - kp_min)
 
         target_kp = target_kp_per_leg[:, self._joint_leg_ids]
         target_kd = float(self.cfg.kd_sqrt_scale) * torch.sqrt(torch.clamp(target_kp, min=0.0))
@@ -213,6 +232,9 @@ class GravityCompPerLegStiffnessActionCfg(actions_cfg.JointPositionActionCfg):
 
     kp_min: float = 20.0
     kp_max: float = 60.0
+    kp_mapping_mode: str = "normalized"
+    kp_default: float = 40.0
+    kp_action_scale: float = 20.0
     kd_sqrt_scale: float = 0.2
     kp_action_clip: tuple[float, float] = (-1.0, 1.0)
     leg_order: tuple[str, str, str, str] = ("FL", "FR", "RL", "RR")
