@@ -64,7 +64,7 @@ class GravityCompPerLegStiffnessAction(JointAction):
     """Joint position action with per-leg variable stiffness and optional gravity compensation.
 
     Action layout:
-    - 0:12  -> joint position actions
+    - 0:11  -> joint position actions
     - 12:16 -> per-leg stiffness actions (FL, FR, RL, RR by default)
     """
 
@@ -75,6 +75,13 @@ class GravityCompPerLegStiffnessAction(JointAction):
 
         if self.cfg.kp_max <= self.cfg.kp_min:
             raise ValueError(f"kp_max must be greater than kp_min. got {self.cfg.kp_max} <= {self.cfg.kp_min}")
+        self._kp_action_clip_min = float(self.cfg.kp_action_clip[0])
+        self._kp_action_clip_max = float(self.cfg.kp_action_clip[1])
+        if self._kp_action_clip_max <= self._kp_action_clip_min:
+            raise ValueError(
+                "kp_action_clip must satisfy high > low. "
+                f"got {self._kp_action_clip_max} <= {self._kp_action_clip_min}"
+            )
         self._kp_mapping_mode = str(self.cfg.kp_mapping_mode).strip().lower()
         if self._kp_mapping_mode not in {"normalized", "default_scale"}:
             raise ValueError(
@@ -103,6 +110,10 @@ class GravityCompPerLegStiffnessAction(JointAction):
             self._scale = self._scale.clone()
         self._scale[:, self._num_joints :] = 1.0
 
+        # Export/runtime parity: explicitly assign finite clip bounds to the 4 stiffness action dimensions.
+        self._clip[:, self._num_joints :, 0] = self._kp_action_clip_min
+        self._clip[:, self._num_joints :, 1] = self._kp_action_clip_max
+
         # Keep default offsets for position actions only.
         if self.cfg.use_default_offset:
             if isinstance(self._offset, float):
@@ -111,17 +122,73 @@ class GravityCompPerLegStiffnessAction(JointAction):
                 self._offset = self._offset.clone()
             self._offset[:, : self._num_joints] = self._asset.data.default_joint_pos[:, self._joint_ids].clone()
 
+        self._action_delay_steps = max(0, int(self.cfg.action_delay_steps))
+        self._applied_raw_actions = torch.zeros_like(self._raw_actions)
+        if self._action_delay_steps > 0:
+            self._delay_buf_size = self._action_delay_steps + 1
+            self._raw_action_history = torch.zeros(
+                (self.num_envs, self._delay_buf_size, self.action_dim), device=self.device, dtype=self._raw_actions.dtype
+            )
+            self._raw_action_history_write_idx = 0
+
     @property
     def action_dim(self) -> int:
         return self._num_joints + 4
 
-    def process_actions(self, actions: torch.Tensor):
-        super().process_actions(actions)
-        kp_clip_min = float(self.cfg.kp_action_clip[0])
-        kp_clip_max = float(self.cfg.kp_action_clip[1])
-        self._processed_actions[:, self._num_joints :] = torch.clamp(
-            self._processed_actions[:, self._num_joints :], min=kp_clip_min, max=kp_clip_max
+    @property
+    def leg_order(self) -> tuple[str, str, str, str]:
+        return self._leg_order
+
+    @property
+    def applied_raw_actions(self) -> torch.Tensor:
+        return self._applied_raw_actions
+
+    def _process_raw_actions(self, raw_actions: torch.Tensor) -> torch.Tensor:
+        processed_actions = raw_actions * self._scale + self._offset
+        if self.cfg.clip is not None:
+            processed_actions = torch.clamp(processed_actions, min=self._clip[:, :, 0], max=self._clip[:, :, 1])
+        processed_actions[:, self._num_joints :] = torch.clamp(
+            processed_actions[:, self._num_joints :],
+            min=self._kp_action_clip_min,
+            max=self._kp_action_clip_max,
         )
+        return processed_actions
+
+    def process_actions(self, actions: torch.Tensor):
+        self._raw_actions[:] = actions
+        if self._action_delay_steps > 0:
+            self._raw_action_history[:, self._raw_action_history_write_idx] = self._raw_actions
+            read_idx = (self._raw_action_history_write_idx + 1) % self._delay_buf_size
+            self._applied_raw_actions[:] = self._raw_action_history[:, read_idx]
+            self._raw_action_history_write_idx = read_idx
+        else:
+            self._applied_raw_actions[:] = self._raw_actions
+
+        self._processed_actions = self._process_raw_actions(self._applied_raw_actions)
+
+    def compute_leg_gains_from_actions(self, leg_kp_actions: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+        """Maps the 4 per-leg stiffness actions to per-leg Kp/Kd gains."""
+        if leg_kp_actions is None:
+            leg_kp_actions = self.processed_actions[:, self._num_joints :]
+        if leg_kp_actions.shape[-1] != 4:
+            raise ValueError(f"Expected per-leg stiffness actions with shape (*, 4). got {tuple(leg_kp_actions.shape)}")
+
+        kp_min = float(self.cfg.kp_min)
+        kp_max = float(self.cfg.kp_max)
+        if self._kp_mapping_mode == "default_scale":
+            kp_default = float(self.cfg.kp_default)
+            kp_action_scale = float(self.cfg.kp_action_scale)
+            target_kp_per_leg = kp_default + leg_kp_actions * kp_action_scale
+            target_kp_per_leg = torch.clamp(target_kp_per_leg, min=kp_min, max=kp_max)
+        else:
+            kp_action_clip_low = float(self.cfg.kp_action_clip[0])
+            kp_action_clip_high = float(self.cfg.kp_action_clip[1])
+            clip_span = max(kp_action_clip_high - kp_action_clip_low, 1e-6)
+            leg_kp_norm = (leg_kp_actions - kp_action_clip_low) / clip_span
+            target_kp_per_leg = kp_min + leg_kp_norm * (kp_max - kp_min)
+
+        target_kd_per_leg = float(self.cfg.kd_sqrt_scale) * torch.sqrt(torch.clamp(target_kp_per_leg, min=0.0))
+        return target_kp_per_leg, target_kd_per_leg
 
     def _resolve_action_joint_global_ids(self) -> torch.Tensor:
         if isinstance(self._joint_ids, slice):
@@ -180,26 +247,9 @@ class GravityCompPerLegStiffnessAction(JointAction):
 
         # Per-leg stiffness actions
         leg_kp_actions = self.processed_actions[:, self._num_joints :]
-        kp_min = float(self.cfg.kp_min)
-        kp_max = float(self.cfg.kp_max)
-        if self._kp_mapping_mode == "default_scale":
-            # Genesis-style mapping:
-            #   kp = kp_default + action * kp_action_scale, then clamp to [kp_min, kp_max].
-            kp_default = float(self.cfg.kp_default)
-            kp_action_scale = float(self.cfg.kp_action_scale)
-            target_kp_per_leg = kp_default + leg_kp_actions * kp_action_scale
-            target_kp_per_leg = torch.clamp(target_kp_per_leg, min=kp_min, max=kp_max)
-        else:
-            # Legacy normalized mapping:
-            #   kp_action_clip low/high maps linearly to [kp_min, kp_max].
-            kp_action_clip_low = float(self.cfg.kp_action_clip[0])
-            kp_action_clip_high = float(self.cfg.kp_action_clip[1])
-            clip_span = max(kp_action_clip_high - kp_action_clip_low, 1e-6)
-            leg_kp_norm = (leg_kp_actions - kp_action_clip_low) / clip_span
-            target_kp_per_leg = kp_min + leg_kp_norm * (kp_max - kp_min)
-
+        target_kp_per_leg, target_kd_per_leg = self.compute_leg_gains_from_actions(leg_kp_actions)
         target_kp = target_kp_per_leg[:, self._joint_leg_ids]
-        target_kd = float(self.cfg.kd_sqrt_scale) * torch.sqrt(torch.clamp(target_kp, min=0.0))
+        target_kd = target_kd_per_leg[:, self._joint_leg_ids]
         self._apply_per_joint_gains(target_kp, target_kd)
 
         # Optional model-based gravity compensation
@@ -223,6 +273,15 @@ class GravityCompPerLegStiffnessAction(JointAction):
 
         self._asset.set_joint_effort_target(feedforward_effort, joint_ids=self._joint_ids)
 
+    def reset(self, env_ids=None) -> None:
+        if env_ids is None:
+            env_ids = slice(None)
+        super().reset(env_ids=env_ids)
+        self._processed_actions[env_ids] = 0.0
+        self._applied_raw_actions[env_ids] = 0.0
+        if self._action_delay_steps > 0:
+            self._raw_action_history[env_ids] = 0.0
+
 
 @configclass
 class GravityCompPerLegStiffnessActionCfg(actions_cfg.JointPositionActionCfg):
@@ -238,6 +297,7 @@ class GravityCompPerLegStiffnessActionCfg(actions_cfg.JointPositionActionCfg):
     kd_sqrt_scale: float = 0.2
     kp_action_clip: tuple[float, float] = (-1.0, 1.0)
     leg_order: tuple[str, str, str, str] = ("FL", "FR", "RL", "RR")
+    action_delay_steps: int = 0
 
     gravity_comp_scale: float = 0.0
     gravity_comp_max_torque: float | None = None

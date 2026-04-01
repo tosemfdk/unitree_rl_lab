@@ -17,3 +17,20 @@ def gait_phase(env: ManagerBasedRLEnv, period: float) -> torch.Tensor:
     phase[:, 0] = torch.sin(global_phase * torch.pi * 2.0)
     phase[:, 1] = torch.cos(global_phase * torch.pi * 2.0)
     return phase
+
+
+def applied_action(env: ManagerBasedRLEnv, action_name: str | None = None) -> torch.Tensor:
+    """Returns the raw action that is actually applied after any action delay."""
+    if action_name is None:
+        active_terms = env.action_manager.active_terms
+        if len(active_terms) != 1:
+            raise ValueError(
+                "action_name must be specified when multiple action terms are active. "
+                f"got active_terms={active_terms}"
+            )
+        action_name = active_terms[0]
+
+    term = env.action_manager.get_term(action_name)
+    if hasattr(term, "applied_raw_actions"):
+        return term.applied_raw_actions
+    return env.action_manager.action

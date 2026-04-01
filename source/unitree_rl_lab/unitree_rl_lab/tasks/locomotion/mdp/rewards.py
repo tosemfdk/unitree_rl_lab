@@ -195,6 +195,29 @@ def feet_contact_without_cmd(
     return reward * (command_norm < 0.1)
 
 
+def no_swing_penalty(
+    env: ManagerBasedRLEnv,
+    sensor_cfg: SceneEntityCfg,
+    command_name: str = "base_velocity",
+    cmd_threshold: float = 0.15,
+    min_air_time: float = 0.05,
+) -> torch.Tensor:
+    """Penalize moving commands that never produce a foot swing.
+
+    If the XY velocity command is non-trivial but every foot's current air-time stays
+    below ``min_air_time``, the policy is likely shuffling or body-rocking in place.
+    """
+
+    contact_sensor: ContactSensor = env.scene.sensors[sensor_cfg.name]
+    if contact_sensor.cfg.track_air_time is False:
+        raise RuntimeError("Activate ContactSensor's track_air_time!")
+
+    command_norm = torch.norm(env.command_manager.get_command(command_name)[:, :2], dim=1)
+    max_air_time = torch.max(contact_sensor.data.current_air_time[:, sensor_cfg.body_ids], dim=1).values
+    no_swing = max_air_time < min_air_time
+    return ((command_norm > cmd_threshold) & no_swing).float()
+
+
 def air_time_variance_penalty(env: ManagerBasedRLEnv, sensor_cfg: SceneEntityCfg) -> torch.Tensor:
     """Penalize variance in the amount of time each foot spends in the air/on the ground relative to each other"""
     # extract the used quantities (to enable type-hinting)
@@ -290,3 +313,22 @@ def action_slice_l2(
 
     target_tensor = torch.as_tensor(float(target), device=actions.device, dtype=actions.dtype)
     return torch.mean(torch.square(actions[:, start:end] - target_tensor), dim=1)
+
+
+def action_slice_rate_l2(
+    env: ManagerBasedRLEnv,
+    start_idx: int,
+    end_idx: int,
+) -> torch.Tensor:
+    """L2 penalty on the rate of change of a contiguous action slice."""
+
+    actions = env.action_manager.action
+    prev_actions = env.action_manager.prev_action
+    dim = actions.shape[1]
+
+    start = max(0, int(start_idx))
+    end = min(int(end_idx), dim)
+    if end <= start:
+        return torch.zeros(actions.shape[0], device=env.device, dtype=actions.dtype)
+
+    return torch.mean(torch.square(actions[:, start:end] - prev_actions[:, start:end]), dim=1)

@@ -33,19 +33,19 @@ COBBLESTONE_ROAD_CFG = terrain_gen.TerrainGeneratorCfg(
     use_cache=True,
     curriculum=True,
     sub_terrains={
-        "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
+        # "flat": terrain_gen.MeshPlaneTerrainCfg(proportion=0.1),
         "random_rough": terrain_gen.HfRandomUniformTerrainCfg(
-            proportion=0.1, noise_range=(0.00, 0.06), noise_step=0.01, border_width=0.25
+            proportion=1.0, noise_range=(0.00, 0.06), noise_step=0.01, border_width=0.25
         ),
-        "boxes": terrain_gen.MeshRandomGridTerrainCfg(
-            proportion=0.2, grid_width=0.45, grid_height_range=(0.00, 0.2), platform_width=2.0
-        ),
-        "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
-            proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
-        ),
-        "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
-            proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
-        ),
+        # "boxes": terrain_gen.MeshRandomGridTerrainCfg(
+        #     proportion=0.2, grid_width=0.45, grid_height_range=(0.00, 0.2), platform_width=2.0
+        # ),
+        # "hf_pyramid_slope": terrain_gen.HfPyramidSlopedTerrainCfg(
+        #     proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
+        # ),
+        # "hf_pyramid_slope_inv": terrain_gen.HfInvertedPyramidSlopedTerrainCfg(
+        #     proportion=0.1, slope_range=(0.0, 0.2), platform_width=2.0, border_width=0.25
+        # ),
         # "pyramid_stairs": terrain_gen.MeshPyramidStairsTerrainCfg(
         #     proportion=0.2,
         #     step_height_range=(0.05, 0.23),
@@ -123,8 +123,8 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*"),
-            "static_friction_range": (0.3, 1.2),
-            "dynamic_friction_range": (0.3, 1.2),
+            "static_friction_range": (0.3, 1.25),
+            "dynamic_friction_range": (0.3, 1.25),
             "restitution_range": (0.0, 0.15),
             "num_buckets": 64,
             "make_consistent": True,
@@ -146,21 +146,11 @@ class EventCfg:
         mode="startup",
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "com_range": {"x": (-0.05, 0.05), "y": (-0.015, 0.015), "z": (-0.01, 0.01)},
+            "com_range": {"x": (-0.03, 0.03), "y": (-0.03, 0.03), "z": (-0.03, 0.03)},
         },
     )
 
     # reset
-    base_external_force_torque = EventTerm(
-        func=mdp.apply_external_force_torque,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names="base"),
-            "force_range": (0.0, 0.0),
-            "torque_range": (-0.0, 0.0),
-        },
-    )
-
     reset_base = EventTerm(
         func=mdp.reset_root_state_uniform,
         mode="reset",
@@ -190,8 +180,8 @@ class EventCfg:
     push_robot = EventTerm(
         func=mdp.push_by_setting_velocity,
         mode="interval",
-        interval_range_s=(5.0, 10.0),
-        params={"velocity_range": {"x": (-0.5, 0.5), "y": (-0.5, 0.5)}},
+        interval_range_s=(8.0, 12.0),
+        params={"velocity_range": {"x": (-0.3, 0.3), "y": (-0.3, 0.3), "yaw": (-0.08, 0.08)}},
     )
 
 
@@ -202,10 +192,10 @@ class CommandsCfg:
     base_velocity = mdp.UniformLevelVelocityCommandCfg(
         asset_name="robot",
         resampling_time_range=(10.0, 10.0),
-        rel_standing_envs=0.1,
+        rel_standing_envs=0.05,
         debug_vis=True,
         ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.1, 0.1), lin_vel_y=(-0.1, 0.1), ang_vel_z=(-1, 1)
+            lin_vel_x=(-0.5, 1.0), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0, 1.0)
         ),
         limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
             lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
@@ -223,16 +213,19 @@ class ActionsCfg:
         # Keep position action scaling on the first 12 dims; PLS gain actions use identity scaling.
         scale={".*": 0.25},
         use_default_offset=True,
+        action_delay_steps=0,
+        # Keep joint-position targets unbounded by the action term clip. The last 4
+        # stiffness actions are clipped separately inside GravityCompPerLegStiffnessAction.
         clip={".*": (-100.0, 100.0)},
-        # Genesis-style PLS mapping:
-        #   kp = 40 + action * 20, then clamp to [10, 70].
+        # Match the Genesis locomotion reference:
+        #   kp = kp_default + action * kp_action_scale, then clamp to [kp_min, kp_max].
         kp_min=10.0,
         kp_max=70.0,
         kp_mapping_mode="default_scale",
         kp_default=40.0,
         kp_action_scale=20.0,
         kd_sqrt_scale=0.2,
-        kp_action_clip=(-100.0, 100.0),
+        kp_action_clip=(-1.0, 1.0),
         leg_order=("FL", "FR", "RL", "RR"),
         gravity_comp_scale=0.0,
     )
@@ -256,7 +249,11 @@ class ObservationsCfg:
         joint_vel_rel = ObsTerm(
             func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100), noise=Unoise(n_min=-1.5, n_max=1.5)
         )
-        last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
+        last_action = ObsTerm(
+            func=mdp.applied_action,
+            clip=(-1.0, 1.0),
+            params={"action_name": "JointPositionAction"},
+        )
 
         def __post_init__(self):
             # self.history_length = 5
@@ -278,7 +275,11 @@ class ObservationsCfg:
         joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, clip=(-100, 100))
         joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, scale=0.05, clip=(-100, 100))
         joint_effort = ObsTerm(func=mdp.joint_effort, scale=0.01, clip=(-100, 100))
-        last_action = ObsTerm(func=mdp.last_action, clip=(-100, 100))
+        last_action = ObsTerm(
+            func=mdp.applied_action,
+            clip=(-1.0, 1.0),
+            params={"action_name": "JointPositionAction"},
+        )
         # height_scanner = ObsTerm(func=mdp.height_scan,
         #     params={"sensor_cfg": SceneEntityCfg("height_scanner")},
         #     clip=(-1.0, 5.0),
@@ -316,7 +317,7 @@ class RewardsCfg:
 
     # -- base
     base_linear_velocity = RewTerm(func=mdp.lin_vel_z_l2, weight=-2.0)
-    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.05)
+    base_angular_velocity = RewTerm(func=mdp.ang_vel_xy_l2, weight=-0.2)
     joint_vel = RewTerm(func=mdp.joint_vel_l2, weight=-0.001)
     joint_acc = RewTerm(func=mdp.joint_acc_l2, weight=-2.5e-7)
     joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-2e-4)
@@ -329,7 +330,7 @@ class RewardsCfg:
 
     joint_pos = RewTerm(
         func=mdp.joint_position_penalty,
-        weight=-0.7,
+        weight=-0.3,
         params={
             "asset_cfg": SceneEntityCfg("robot", joint_names=".*"),
             "stand_still_scale": 5.0,
@@ -338,18 +339,28 @@ class RewardsCfg:
     )
 
     # -- feet
-    # feet_air_time = RewTerm(
-    #     func=mdp.feet_air_time,
-    #     weight=1.0,
-    #     params={
-    #         "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
-    #         "command_name": "base_velocity",
-    #         "threshold": 0.5,
-    #     },
-    # )
+    feet_air_time = RewTerm(
+        func=mdp.feet_air_time,
+        weight=1.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+            "command_name": "base_velocity",
+            "threshold": 0.1,
+        },
+    )
+    no_swing = RewTerm(
+        func=mdp.no_swing_penalty,
+        weight=-2.0,
+        params={
+            "sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot"),
+            "command_name": "base_velocity",
+            "cmd_threshold": 0.15,
+            "min_air_time": 0.05,
+        },
+    )
     air_time_variance = RewTerm(
         func=mdp.air_time_variance_penalty,
-        weight=-1.0,
+        weight=-0.2,
         params={"sensor_cfg": SceneEntityCfg("contact_forces", body_names=".*_foot")},
     )
     feet_slide = RewTerm(
@@ -363,11 +374,11 @@ class RewardsCfg:
     
     feet_clearance = RewTerm(
         func=mdp.feet_clearance_reward,
-        weight=0.1,
+        weight=0.5,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=".*_foot"),
             "sensor_cfg": SceneEntityCfg("height_scanner"),
-            "target_height": 0.04,
+            "target_height": 0.05,
             "std": 0.05,
             "tanh_mult": 2.0,
         },
@@ -424,53 +435,6 @@ class CurriculumCfg:
 
 
 @configclass
-class CommandsPLSProbeCfg(CommandsCfg):
-    """Harder command distribution to force active stiffness modulation."""
-
-    base_velocity = mdp.UniformLevelVelocityCommandCfg(
-        asset_name="robot",
-        resampling_time_range=(7.0, 7.0),
-        rel_standing_envs=0.05,
-        debug_vis=True,
-        ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-0.6, 0.6), lin_vel_y=(-0.3, 0.3), ang_vel_z=(-1.0, 1.0)
-        ),
-        limit_ranges=mdp.UniformLevelVelocityCommandCfg.Ranges(
-            lin_vel_x=(-1.0, 1.0), lin_vel_y=(-0.4, 0.4), ang_vel_z=(-1.0, 1.0)
-        ),
-    )
-
-
-@configclass
-class EventPLSProbeCfg(EventCfg):
-    """Stronger and more frequent disturbances for PLS probing."""
-
-    push_robot = EventTerm(
-        func=mdp.push_by_setting_velocity,
-        mode="interval",
-        interval_range_s=(2.0, 4.0),
-        params={"velocity_range": {"x": (-1.0, 1.0), "y": (-1.0, 1.0)}},
-    )
-
-
-@configclass
-class RewardsPLSProbeCfg(RewardsCfg):
-    """Reward profile tuned to reduce stiffness collapse."""
-
-    # Relax energy-like penalties so the policy can spend torque when needed.
-    joint_torques = RewTerm(func=mdp.joint_torques_l2, weight=-1e-4)
-    action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.005)
-    energy = RewTerm(func=mdp.energy, weight=-1e-5)
-
-    # Weakly regularize the 4 stiffness actions (indices 12:16) toward neutral action(=0).
-    stiffness_action_centering = RewTerm(
-        func=mdp.action_slice_l2,
-        weight=-0.002,
-        params={"start_idx": 12, "end_idx": 16, "target": 0.0},
-    )
-
-
-@configclass
 class RobotEnvCfg(ManagerBasedRLEnvCfg):
     """Configuration for the locomotion velocity-tracking environment."""
 
@@ -514,25 +478,6 @@ class RobotEnvCfg(ManagerBasedRLEnvCfg):
 
 @configclass
 class RobotPlayEnvCfg(RobotEnvCfg):
-    def __post_init__(self):
-        super().__post_init__()
-        self.scene.num_envs = 32
-        self.scene.terrain.terrain_generator.num_rows = 2
-        self.scene.terrain.terrain_generator.num_cols = 1
-        self.commands.base_velocity.ranges = self.commands.base_velocity.limit_ranges
-
-
-@configclass
-class RobotPLSProbeEnvCfg(RobotEnvCfg):
-    """Experimental profile for debugging PLS stiffness collapse."""
-
-    commands: CommandsPLSProbeCfg = CommandsPLSProbeCfg()
-    events: EventPLSProbeCfg = EventPLSProbeCfg()
-    rewards: RewardsPLSProbeCfg = RewardsPLSProbeCfg()
-
-
-@configclass
-class RobotPLSProbePlayEnvCfg(RobotPLSProbeEnvCfg):
     def __post_init__(self):
         super().__post_init__()
         self.scene.num_envs = 32
